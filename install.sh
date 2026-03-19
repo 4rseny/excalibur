@@ -41,6 +41,7 @@ UDEV_RULES_FILE="/etc/udev/rules.d/99-excalibur.rules"
 DESKTOP_FILE="/usr/share/applications/excalibur-panel.desktop"
 INITRAMFS_CMD=""
 PYTHON_BIN="python3"
+CC_COMPILER="gcc"
 PKG_INSTALL=""
 HEADERS_PKG=""
 
@@ -126,17 +127,35 @@ detect_distro() {
     esac
 }
 
+# ── Compiler detection ───────────────────────────────────────────────────────
+detect_compiler() {
+    # The running kernel records the compiler it was built with in /proc/version.
+    # If the string contains "clang", out-of-tree modules must be compiled with
+    # clang (and LD=ld.lld) so that the compiler ABI matches.
+    if grep -qi "clang" /proc/version 2>/dev/null; then
+        CC_COMPILER="clang"
+        info "Kernel was built with Clang — will use CC=clang for module build"
+    else
+        CC_COMPILER="gcc"
+        info "Kernel was built with GCC — will use CC=gcc for module build"
+    fi
+}
+
 # ── Pre-flight checks ─────────────────────────────────────────────────────────
 check_build_tools() {
     local missing=()
     command -v make &>/dev/null || missing+=("make")
-    command -v gcc  &>/dev/null || missing+=("gcc")
+    if [[ "$CC_COMPILER" == "clang" ]]; then
+        command -v clang &>/dev/null || missing+=("clang")
+    else
+        command -v gcc   &>/dev/null || missing+=("gcc")
+    fi
     if [[ ${#missing[@]} -gt 0 ]]; then
         err "Missing build tools: ${missing[*]}"
         [[ -n "$PKG_INSTALL" ]] && info "Install with: ${PKG_INSTALL} ${missing[*]}"
         return 1
     fi
-    ok "Build tools present (make, gcc)"
+    ok "Build tools present (make, ${CC_COMPILER})"
 }
 
 check_kernel_headers() {
@@ -204,8 +223,9 @@ build_driver() {
         info "Run this script from the excalibur source directory."
         exit 1
     fi
+    info "Compiler: CC=${CC_COMPILER}"
     make clean 2>/dev/null || true
-    if make; then
+    if make CC="${CC_COMPILER}"; then
         ok "Module built: ${KO_FILE}"
     else
         err "Build failed"
@@ -481,6 +501,7 @@ interactive_uninstall() {
 # ── Entry point ───────────────────────────────────────────────────────────────
 require_root
 detect_distro
+detect_compiler
 
 case "${1:-}" in
     install)
